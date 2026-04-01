@@ -257,7 +257,7 @@ if uploaded_file:
                     }
                     return colors.get(val, "")
                 
-                styled_df = result_df.style.applymap(highlight_kano, subset=["最终分类"])
+                styled_df = result_df.style.map(highlight_kano, subset=["最终分类"])
                 st.dataframe(styled_df, use_container_width=True, height=600)
                 
                 # 2. 统计图表
