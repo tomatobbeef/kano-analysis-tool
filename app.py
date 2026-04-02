@@ -136,26 +136,27 @@ def classify_kano(pos_score, neg_score):
 
 
 def analyze_single_func(df, func_name, pos_col, neg_col):
-    """单个功能的KANO分析"""
-    # 提取数据
+    """单个功能的KANO分析（完美对齐问卷星逻辑）"""
     data = df[[pos_col, neg_col]].copy()
     data.columns = ["pos", "neg"]
+    
+    # 【修复1】清除 Excel 数据中的前后空格，防止匹配失败
+    data["pos"] = data["pos"].astype(str).str.strip()
+    data["neg"] = data["neg"].astype(str).str.strip()
     
     # 映射为数字
     data["pos_num"] = data["pos"].map(SCORE_MAP)
     data["neg_num"] = data["neg"].map(SCORE_MAP)
-    
-    # 删除无效值
     data = data.dropna(subset=["pos_num", "neg_num"])
     
     if len(data) == 0:
         return None
     
-    # 逐样本分类
+    # 逐样本分类 (这里必须调用上一回我提供给你的矩阵版 classify_kano 函数)
     data["kano_type"] = data.apply(lambda row: classify_kano(row["pos_num"], row["neg_num"]), axis=1)
     
-    # 统计占比
-    type_counts = data["kano_type"].value_counts(normalize=True)
+    # 统计数量 (注意：问卷星计算类别通常按绝对数量，而非百分比)
+    type_counts = data["kano_type"].value_counts()
     counts_dict = {
         "必备属性M": type_counts.get("必备属性M", 0),
         "期望属性O": type_counts.get("期望属性O", 0),
@@ -165,11 +166,18 @@ def analyze_single_func(df, func_name, pos_col, neg_col):
         "可疑结果Q": type_counts.get("可疑结果Q", 0)
     }
     
-    # 过滤掉Q和R，如果M,O,A,I的占比相近，取有效分类中最高的
-    valid_types = {k: counts_dict[k] for k in["必备属性M", "期望属性O", "魅力属性A", "无差异属性I"]}
+    # 【修复2】严格对齐问卷星的优先级：当频数相同时，M > O > A > I
+    # 我们按照优先级顺序提取数量
+    valid_types = {
+        "必备属性M": counts_dict["必备属性M"],
+        "期望属性O": counts_dict["期望属性O"],
+        "魅力属性A": counts_dict["魅力属性A"],
+        "无差异属性I": counts_dict["无差异属性I"]
+    }
+    # python的 max 遇到相同值时会返回先出现的值，所以我们故意按 M, O, A, I 的顺序构建字典
     final_type = max(valid_types, key=valid_types.get) 
     
-    # Better-Worse系数计算 (标准算法：分母排除R和Q)
+    # 【修复3】对齐问卷星 Better-Worse 算法（分母=A+O+M+I）
     valid_total = counts_dict["魅力属性A"] + counts_dict["期望属性O"] + counts_dict["必备属性M"] + counts_dict["无差异属性I"]
     
     if valid_total > 0:
@@ -178,14 +186,18 @@ def analyze_single_func(df, func_name, pos_col, neg_col):
     else:
         better = 0
         worse = 0
+        
+    # 为了展示，把 counts_dict 转成总样本的百分比
+    total_samples = len(data)
+    percent_dict = {k: round(v/total_samples*100, 2) if total_samples > 0 else 0 for k, v in counts_dict.items()}
     
     return {
         "功能": func_name,
         "样本数": len(data),
         "最终分类": final_type,
-        "Better系数": round(better, 2),
+        "Better系数": round(better, 2), # 这里算出来就会是 44.44, 55.56 等
         "Worse系数": round(worse, 2),
-        **{k: round(v*100, 2) for k, v in counts_dict.items()}  # 转为百分比
+        **percent_dict
     }
 
 # ==================== 3. Streamlit界面 ====================
