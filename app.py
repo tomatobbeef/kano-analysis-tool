@@ -112,55 +112,28 @@ FUNC_MAP = {
 }
 
 # ==================== 2. KANO分类函数（与问卷星逻辑一致）====================
+# ==================== 2. KANO分类函数（标准矩阵修复版）====================
 def classify_kano(pos_score, neg_score):
     """
-    KANO分类逻辑（基于标准KANO模型）：
-    pos_score: 正向题得分（有功能时的评价）1-5
-    neg_score: 反向题得分（无功能时的评价）1-5
-    
-    注意：反向题中，1=很不喜欢（没有功能我很不喜欢=我需要这个功能），5=很喜欢（没有功能我很喜欢=我不需要）
+    使用标准的KANO二维矩阵进行精准分类：
+    行代表正向问题(有该功能)得分：5=很喜欢, 4=理所当然, 3=无所谓, 2=勉强接受, 1=很不喜欢
+    列代表反向问题(无该功能)得分：5=很喜欢, 4=理所当然, 3=无所谓, 2=勉强接受, 1=很不喜欢
     """
     p = int(pos_score)
     n = int(neg_score)
     
-    # 必备属性 M：有则满意(4/5)，无则不满(1/2)
-    if (p in [4, 5]) and (n in [1, 2]):
-        return "必备属性M"
+    # 严格的 KANO 评价对照矩阵 [正向得分][反向得分]
+    kano_matrix = {
+        5: {5: "可疑结果Q", 4: "魅力属性A", 3: "魅力属性A", 2: "魅力属性A", 1: "期望属性O"},
+        4: {5: "反向属性R", 4: "无差异属性I", 3: "无差异属性I", 2: "无差异属性I", 1: "必备属性M"},
+        3: {5: "反向属性R", 4: "无差异属性I", 3: "无差异属性I", 2: "无差异属性I", 1: "必备属性M"},
+        2: {5: "反向属性R", 4: "无差异属性I", 3: "无差异属性I", 2: "无差异属性I", 1: "必备属性M"},
+        1: {5: "反向属性R", 4: "反向属性R", 3: "反向属性R", 2: "反向属性R", 1: "可疑结果Q"}
+    }
     
-    # 期望属性 O：有则满意，无则勉强接受/也满意（线性关系，不够惊喜）
-    if (p in [4, 5]) and (n in [4, 5]):
-        return "期望属性O"
-    if (p == 5) and (n == 4):
-        return "期望属性O"
-    
-    # 魅力属性 A：有则很喜欢(5)，无则无所谓(3) - 惊喜型
-    if (p == 5) and (n == 3):
-        return "魅力属性A"
-    if (p == 4) and (n == 3):
-        return "魅力属性A"
-    
-    # 无差异属性 I：有无都无所谓，或态度一致
-    if (p == 3) and (n in [2, 3, 4]):
-        return "无差异属性I"
-    if (p == 4) and (n == 4):  # 有则理所当然，无则理所当然 → 其实是期望？但通常归为无差异或期望
-        return "无差异属性I"
-    
-    # 反向属性 R：有则不满(1/2)，无则喜(4/5)；或有无都喜（不需要这个功能）
-    if (p in [1, 2]) and (n in [4, 5]):
-        return "反向属性R"
-    if (p in [1, 2]) and (n in [1, 2, 3]):  # 有则不满，无则无所谓/不满
-        return "反向属性R"
-    if (p in [3, 4, 5]) and (n == 5):  # 无则很喜欢（没有更好）
-        return "反向属性R"
-    
-    # 可疑结果 Q：矛盾回答（如很喜欢有且很喜欢无）
-    if (p == 5) and (n == 5):
-        return "可疑结果Q"
-    if (p == 1) and (n == 1):
-        return "可疑结果Q"
-    
-    # 默认归类
-    return "无差异属性I"
+    # 查表返回结果，如果出现异常分数默认归为"无差异"
+    return kano_matrix.get(p, {}).get(n, "无差异属性I")
+
 
 def analyze_single_func(df, func_name, pos_col, neg_col):
     """单个功能的KANO分析"""
@@ -192,14 +165,16 @@ def analyze_single_func(df, func_name, pos_col, neg_col):
         "可疑结果Q": type_counts.get("可疑结果Q", 0)
     }
     
-    # 取占比最高的为最终分类
-    final_type = max(counts_dict, key=counts_dict.get)
+    # 过滤掉Q和R，如果M,O,A,I的占比相近，取有效分类中最高的
+    valid_types = {k: counts_dict[k] for k in["必备属性M", "期望属性O", "魅力属性A", "无差异属性I"]}
+    final_type = max(valid_types, key=valid_types.get) 
     
-    # Better-Worse系数计算（与问卷星一致的百分比形式）
-    total = sum(counts_dict.values())
-    if total > 0:
-        better = (counts_dict["魅力属性A"] + counts_dict["期望属性O"]) / total * 100
-        worse = -(counts_dict["必备属性M"] + counts_dict["期望属性O"]) / total * 100
+    # Better-Worse系数计算 (标准算法：分母排除R和Q)
+    valid_total = counts_dict["魅力属性A"] + counts_dict["期望属性O"] + counts_dict["必备属性M"] + counts_dict["无差异属性I"]
+    
+    if valid_total > 0:
+        better = (counts_dict["魅力属性A"] + counts_dict["期望属性O"]) / valid_total * 100
+        worse = -(counts_dict["必备属性M"] + counts_dict["期望属性O"]) / valid_total * 100
     else:
         better = 0
         worse = 0
