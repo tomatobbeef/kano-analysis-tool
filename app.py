@@ -112,51 +112,77 @@ FUNC_MAP = {
 }
 
 # ==================== 2. KANO分类函数（与问卷星逻辑一致）====================
-# ==================== 2. KANO分类函数（标准矩阵修复版）====================
 def classify_kano(pos_score, neg_score):
     """
-    使用标准的KANO二维矩阵进行精准分类：
-    行代表正向问题(有该功能)得分：5=很喜欢, 4=理所当然, 3=无所谓, 2=勉强接受, 1=很不喜欢
-    列代表反向问题(无该功能)得分：5=很喜欢, 4=理所当然, 3=无所谓, 2=勉强接受, 1=很不喜欢
+    KANO分类逻辑（基于标准KANO模型）：
+    pos_score: 正向题得分（有功能时的评价）1-5
+    neg_score: 反向题得分（无功能时的评价）1-5
+    
+    注意：反向题中，1=很不喜欢（没有功能我很不喜欢=我需要这个功能），5=很喜欢（没有功能我很喜欢=我不需要）
     """
     p = int(pos_score)
     n = int(neg_score)
     
-    # 严格的 KANO 评价对照矩阵 [正向得分][反向得分]
-    kano_matrix = {
-        5: {5: "可疑结果Q", 4: "魅力属性A", 3: "魅力属性A", 2: "魅力属性A", 1: "期望属性O"},
-        4: {5: "反向属性R", 4: "无差异属性I", 3: "无差异属性I", 2: "无差异属性I", 1: "必备属性M"},
-        3: {5: "反向属性R", 4: "无差异属性I", 3: "无差异属性I", 2: "无差异属性I", 1: "必备属性M"},
-        2: {5: "反向属性R", 4: "无差异属性I", 3: "无差异属性I", 2: "无差异属性I", 1: "必备属性M"},
-        1: {5: "反向属性R", 4: "反向属性R", 3: "反向属性R", 2: "反向属性R", 1: "可疑结果Q"}
-    }
+    # 必备属性 M：有则满意(4/5)，无则不满(1/2)
+    if (p in [4, 5]) and (n in [1, 2]):
+        return "必备属性M"
     
-    # 查表返回结果，如果出现异常分数默认归为"无差异"
-    return kano_matrix.get(p, {}).get(n, "无差异属性I")
-
+    # 期望属性 O：有则满意，无则勉强接受/也满意（线性关系，不够惊喜）
+    if (p in [4, 5]) and (n in [4, 5]):
+        return "期望属性O"
+    if (p == 5) and (n == 4):
+        return "期望属性O"
+    
+    # 魅力属性 A：有则很喜欢(5)，无则无所谓(3) - 惊喜型
+    if (p == 5) and (n == 3):
+        return "魅力属性A"
+    if (p == 4) and (n == 3):
+        return "魅力属性A"
+    
+    # 无差异属性 I：有无都无所谓，或态度一致
+    if (p == 3) and (n in [2, 3, 4]):
+        return "无差异属性I"
+    if (p == 4) and (n == 4):  # 有则理所当然，无则理所当然 → 其实是期望？但通常归为无差异或期望
+        return "无差异属性I"
+    
+    # 反向属性 R：有则不满(1/2)，无则喜(4/5)；或有无都喜（不需要这个功能）
+    if (p in [1, 2]) and (n in [4, 5]):
+        return "反向属性R"
+    if (p in [1, 2]) and (n in [1, 2, 3]):  # 有则不满，无则无所谓/不满
+        return "反向属性R"
+    if (p in [3, 4, 5]) and (n == 5):  # 无则很喜欢（没有更好）
+        return "反向属性R"
+    
+    # 可疑结果 Q：矛盾回答（如很喜欢有且很喜欢无）
+    if (p == 5) and (n == 5):
+        return "可疑结果Q"
+    if (p == 1) and (n == 1):
+        return "可疑结果Q"
+    
+    # 默认归类
+    return "无差异属性I"
 
 def analyze_single_func(df, func_name, pos_col, neg_col):
-    """单个功能的KANO分析（完美对齐问卷星逻辑）"""
+    """单个功能的KANO分析"""
+    # 提取数据
     data = df[[pos_col, neg_col]].copy()
     data.columns = ["pos", "neg"]
-    
-    # 【修复1】清除 Excel 数据中的前后空格，防止匹配失败
-    data["pos"] = data["pos"].astype(str).str.strip()
-    data["neg"] = data["neg"].astype(str).str.strip()
     
     # 映射为数字
     data["pos_num"] = data["pos"].map(SCORE_MAP)
     data["neg_num"] = data["neg"].map(SCORE_MAP)
+    
+    # 删除无效值
     data = data.dropna(subset=["pos_num", "neg_num"])
     
     if len(data) == 0:
         return None
     
-    # 逐样本分类 (这里必须调用上一回我提供给你的矩阵版 classify_kano 函数)
+    # 逐样本分类
     data["kano_type"] = data.apply(lambda row: classify_kano(row["pos_num"], row["neg_num"]), axis=1)
     
-    # 统计数量 (注意：问卷星计算类别通常按绝对数量，而非百分比)
-    type_counts = data["kano_type"].value_counts()
+    # 统计占比
+    type_counts = data["kano_type"].value_counts(normalize=True)
     counts_dict = {
         "必备属性M": type_counts.get("必备属性M", 0),
         "期望属性O": type_counts.get("期望属性O", 0),
@@ -166,38 +192,25 @@ def analyze_single_func(df, func_name, pos_col, neg_col):
         "可疑结果Q": type_counts.get("可疑结果Q", 0)
     }
     
-    # 【修复2】严格对齐问卷星的优先级：当频数相同时，M > O > A > I
-    # 我们按照优先级顺序提取数量
-    valid_types = {
-        "必备属性M": counts_dict["必备属性M"],
-        "期望属性O": counts_dict["期望属性O"],
-        "魅力属性A": counts_dict["魅力属性A"],
-        "无差异属性I": counts_dict["无差异属性I"]
-    }
-    # python的 max 遇到相同值时会返回先出现的值，所以我们故意按 M, O, A, I 的顺序构建字典
-    final_type = max(valid_types, key=valid_types.get) 
+    # 取占比最高的为最终分类
+    final_type = max(counts_dict, key=counts_dict.get)
     
-    # 【修复3】对齐问卷星 Better-Worse 算法（分母=A+O+M+I）
-    valid_total = counts_dict["魅力属性A"] + counts_dict["期望属性O"] + counts_dict["必备属性M"] + counts_dict["无差异属性I"]
-    
-    if valid_total > 0:
-        better = (counts_dict["魅力属性A"] + counts_dict["期望属性O"]) / valid_total * 100
-        worse = -(counts_dict["必备属性M"] + counts_dict["期望属性O"]) / valid_total * 100
+    # Better-Worse系数计算（与问卷星一致的百分比形式）
+    total = sum(counts_dict.values())
+    if total > 0:
+        better = (counts_dict["魅力属性A"] + counts_dict["期望属性O"]) / total * 100
+        worse = -(counts_dict["必备属性M"] + counts_dict["期望属性O"]) / total * 100
     else:
         better = 0
         worse = 0
-        
-    # 为了展示，把 counts_dict 转成总样本的百分比
-    total_samples = len(data)
-    percent_dict = {k: round(v/total_samples*100, 2) if total_samples > 0 else 0 for k, v in counts_dict.items()}
     
     return {
         "功能": func_name,
         "样本数": len(data),
         "最终分类": final_type,
-        "Better系数": round(better, 2), # 这里算出来就会是 44.44, 55.56 等
+        "Better系数": round(better, 2),
         "Worse系数": round(worse, 2),
-        **percent_dict
+        **{k: round(v*100, 2) for k, v in counts_dict.items()}  # 转为百分比
     }
 
 # ==================== 3. Streamlit界面 ====================
